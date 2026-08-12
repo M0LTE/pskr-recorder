@@ -1,0 +1,39 @@
+#!/bin/bash
+# One-glance health check for the eclipse capture. Read-only.
+set -u
+
+DATA=${PSKR_DATA:-/var/lib/pskr/data}
+
+echo "=== $(date -u '+%Y-%m-%d %H:%M:%S UTC') ==="
+echo
+
+for i in a b; do
+    act=$(systemctl is-active "pskr-collect@$i" 2>/dev/null)
+    nr=$(systemctl show -p NRestarts --value "pskr-collect@$i" 2>/dev/null)
+    printf "instance %s: %-8s restarts=%s  " "$i" "$act" "${nr:-?}"
+    if [ -r "$DATA/status-$i.json" ]; then
+        jq -r '"recv=\(.received) written=\(.written) dropped=\(.dropped) q=\(.qdepth) disc=\(.disconnects)"' \
+           "$DATA/status-$i.json" 2>/dev/null || echo
+    else
+        echo "(no heartbeat yet)"
+    fi
+done
+
+echo
+echo "-- current hour --"
+ls -la "$DATA"/spots-"$(date -u +%Y%m%d-%H)"-*.gz 2>/dev/null | awk '{printf "  %10s  %s\n", $5, $9}' \
+  || echo "  (no files for this hour yet)"
+
+echo
+echo "-- last spot seen --"
+newest=$(ls -t "$DATA"/spots-*.jsonl.gz 2>/dev/null | head -1)
+if [ -n "${newest:-}" ]; then
+    zcat "$newest" 2>/dev/null | tail -2 | head -1 \
+      | jq -r '"  t_tx=\(.t_tx | todate)  band=\(.b)  \(.sc) -> \(.rc)  lag=\(((now - .t) | floor))s"' 2>/dev/null \
+      || echo "  (could not parse)"
+fi
+
+echo
+echo "-- disk --"
+df -h "$DATA" | tail -1 | awk '{printf "  %s used of %s (%s), %s free\n", $3, $2, $5, $4}'
+du -sh "$DATA" 2>/dev/null | awk '{printf "  capture: %s\n", $1}'

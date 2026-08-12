@@ -1,0 +1,59 @@
+#!/bin/bash
+# Normalise the capture directory into a set of clean, complete gzip files that
+# DuckDB will read.
+#
+# Two kinds of file are not valid gzip streams and DuckDB refuses both outright
+# with "Input is not a GZIP stream", even though zcat recovers them fine:
+#
+#   - the file currently being written, which has no trailer yet
+#   - any file whose writer was hard-killed, truncated at the last flush
+#
+# Good files are hardlinked, so they cost nothing. Only the handful of damaged
+# or live ones are actually rewritten. Safe to re-run; safe to run while the
+# collectors are going.
+#
+# Originals are never modified. They remain the ground truth.
+
+# Deliberately no pipefail: zcat exits non-zero on exactly the truncated files
+# we are here to recover, and its output up to the damage point is what we want.
+# Success is judged by whether anything came out, not by exit status.
+set -u
+
+DATA=${PSKR_DATA:-/var/lib/pskr/data}
+CLEAN=${PSKR_CLEAN:-/var/lib/pskr/clean}
+
+mkdir -p "$CLEAN"
+
+ok=0; repaired=0; empty=0
+
+for f in "$DATA"/spots-*.jsonl.gz; do
+    [ -e "$f" ] || continue
+    base=$(basename "$f")
+    out="$CLEAN/$base"
+
+    if gzip -t "$f" 2>/dev/null; then
+        # complete file: hardlink, free
+        ln -f "$f" "$out" 2>/dev/null || cp -f "$f" "$out"
+        ok=$((ok + 1))
+    else
+        # live or damaged: recover everything up to the damage point, and drop
+        # a trailing partial line so the result is strictly valid NDJSON
+        rm -f "$out"
+        zcat "$f" 2>/dev/null \
+          | awk 'p != "" { print p } { p = $0 } END { if (p ~ /}$/) print p }' \
+          | gzip -c > "$out.tmp" 2>/dev/null
+
+        if [ -s "$out.tmp" ]; then
+            mv -f "$out.tmp" "$out"
+            repaired=$((repaired + 1))
+        else
+            rm -f "$out.tmp"
+            empty=$((empty + 1))
+            echo "  WARNING: recovered nothing from $base" >&2
+        fi
+    fi
+done
+
+echo "prepared: $ok complete (hardlinked), $repaired recovered, $empty unreadable"
+echo "clean set: $CLEAN"
+ls -1 "$CLEAN"/spots-*.jsonl.gz 2>/dev/null | wc -l | xargs echo "files:"

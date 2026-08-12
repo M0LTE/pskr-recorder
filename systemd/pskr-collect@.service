@@ -1,0 +1,35 @@
+[Unit]
+Description=PSK Reporter full-feed MQTT collector (instance %i)
+Documentation=https://www.mqtt.pskreporter.info/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pskr
+Group=pskr
+Environment=PSKR_TOPIC=pskr/filter/v2/#
+Environment=PSKR_HOST=mqtt.pskreporter.info
+Environment=PSKR_PORT=1883
+Environment=PSKR_OUTDIR=/var/lib/pskr/data
+Environment=PSKR_INSTANCE=%i
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /opt/pskr/pskr_collect.py
+
+# A once-only event: never give up, never rate-limit the restarts away.
+Restart=always
+RestartSec=2
+StartLimitIntervalSec=0
+
+# Give the writer time to close the gzip member cleanly on stop.
+TimeoutStopSec=45
+KillSignal=SIGTERM
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/pskr
+
+[Install]
+WantedBy=multi-user.target

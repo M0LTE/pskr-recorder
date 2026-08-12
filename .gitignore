@@ -1,0 +1,16 @@
+# Captured data and anything derived from it. The capture is the point of this
+# repo, but it does not belong in it: an hour of the full feed is ~60 MB.
+*.jsonl
+*.jsonl.gz
+*.duckdb
+*.duckdb.wal
+*.parquet
+clean/
+data/
+
+# Editor and OS noise
+*.swp
+*~
+.DS_Store
+__pycache__/
+*.pyc
