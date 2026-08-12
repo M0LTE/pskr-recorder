@@ -110,7 +110,16 @@ That is a real finding about the measurement, and it would apply to anyone attem
 
 **`tail` on a build log hides the error.** A rebuild reported a plausible row count and a healthy runtime while silently serving three-hour-old data, because the result table plus timing filled exactly the last ten lines and the error above them was cut off. Log builds in full, or not at all.
 
-**`CREATE OR REPLACE TABLE` fails on a table a view depends on.** So step 0 worked the first time and, on every rerun, kept the old `spots` while rebuilding everything downstream from it -- reporting success throughout. It now drops the view and dependants first, and prints `max(tx_time)` so a stale build is obvious. This would have quietly corrupted the control-day comparison, which is the one analysis that matters.
+**A failed `CREATE OR REPLACE TABLE` leaves the old table in place, and everything downstream then rebuilds happily from stale data.** A rebuild three hours after the event reported a plausible row count, a healthy runtime, and a maximum timestamp from before the eclipse had even finished. The table had not been replaced; the view over it, the derived tables and the final summary were all recomputed from the previous contents.
+
+The underlying failure was `SELECT DISTINCT ON (sq) *`, which drags every column of every row through the sort: for 23.8M rows that spilled **55 GB** to the temp directory, roughly 2.3 kB per 180-byte record, and died when it ran out of disk. Naming the fourteen columns actually needed, before deduplicating, fixes it.
+
+Two changes came out of that, and both matter more than the bug did:
+
+- Step 0 now **drops the view and its dependants first**, so a failure leaves nothing rather than something plausible and wrong, and prints `max(tx_time)` so staleness announces itself.
+- The spill is now **capped at 20 GiB**. By default DuckDB will use all available disk, and the temp directory sits on the same volume the collectors are writing to. That run took 55.6 GB of 62 GB free while capture was live. The collectors survived with zero drops, but only because the spill stopped just short. Analysis should not be able to fill the disk out from under the capture.
+
+Had this landed on the control-day comparison it would have produced a confident, precise, entirely fictional answer.
 
 ## What to actually do
 

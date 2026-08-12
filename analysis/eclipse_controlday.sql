@@ -19,6 +19,74 @@
 
 .mode box
 
+-- ============================================================ 3. THE decisive one
+-- Run the identical superposed-epoch curve on both days and subtract.
+--
+-- On eclipse day the curve rose about +5 dB on the low bands and, crucially,
+-- never came back down: still elevated two hours after the umbra had left. That
+-- is the shape of dusk, not of a two-hour obscuration. But "looks like dusk"
+-- and "is dusk" are different claims, and only this separates them: compute the
+-- same curve on a day with no eclipse, using the same geographic alignment and
+-- the same clock times, and difference the two.
+--
+-- If the eclipse contributed nothing, the two curves lie on top of each other
+-- and eclipse_minus_control is flat at zero. If it contributed something, the
+-- difference has a bump centred near dt = 0 that decays afterwards.
+
+CREATE OR REPLACE TEMP TABLE cell_ecl AS
+WITH cells AS (
+  SELECT DISTINCT round(mid_lat) AS clat, round(mid_lon) AS clon
+  FROM s WHERE mid_lat IS NOT NULL
+),
+d AS (
+  SELECT c.clat, c.clon, t.epoch,
+         haversine_km(c.clat, c.clon, t.lat, t.lon) AS km,
+         row_number() OVER (PARTITION BY c.clat, c.clon
+                            ORDER BY haversine_km(c.clat, c.clon, t.lat, t.lon)) AS rn
+  FROM cells c CROSS JOIN eclipse_track t
+)
+SELECT clat, clon, epoch AS t_ecl, km AS d_min_km FROM d WHERE rn = 1;
+
+CREATE OR REPLACE TEMP TABLE ep2 AS
+SELECT sp.*, ce.d_min_km,
+       date_trunc('day', sp.tx_time)::DATE AS day,
+       -- align on the SAME clock offset both days: the control day's reference
+       -- is the eclipse time shifted by exactly 24 h
+       (sp.t_tx - (ce.t_ecl + CASE WHEN date_trunc('day', sp.tx_time)::DATE
+                                        = DATE '2026-08-13' THEN 86400 ELSE 0 END)) / 60.0
+         AS dt_min
+FROM s sp
+JOIN cell_ecl ce ON ce.clat = round(sp.mid_lat) AND ce.clon = round(sp.mid_lon)
+WHERE date_trunc('day', sp.tx_time)::DATE IN (DATE '2026-08-12', DATE '2026-08-13')
+  AND sp.mid_lat IS NOT NULL AND sp.dist_km BETWEEN 300 AND 2500;
+
+CREATE OR REPLACE TEMP TABLE base2 AS
+SELECT day, tx_call, rx_call, band, median(snr) AS snr0
+FROM ep2 WHERE dt_min BETWEEN -180 AND -120
+GROUP BY 1, 2, 3, 4 HAVING count(*) >= 3;
+
+SELECT '=== 3. superposed epoch, eclipse day minus control day ===' AS section;
+
+SELECT
+  e.band,
+  CAST(floor(e.dt_min / 30) * 30 AS INT) AS dt_bin_min,
+  round(median(e.snr - b.snr0) FILTER (WHERE e.day = DATE '2026-08-12'
+                                         AND e.d_min_km < 1500), 2) AS eclipse_day,
+  round(median(e.snr - b.snr0) FILTER (WHERE e.day = DATE '2026-08-13'
+                                         AND e.d_min_km < 1500), 2) AS control_day,
+  round(median(e.snr - b.snr0) FILTER (WHERE e.day = DATE '2026-08-12'
+                                         AND e.d_min_km < 1500)
+      - median(e.snr - b.snr0) FILTER (WHERE e.day = DATE '2026-08-13'
+                                         AND e.d_min_km < 1500), 2) AS eclipse_minus_control,
+  count(*) FILTER (WHERE e.day = DATE '2026-08-12' AND e.d_min_km < 1500) AS n_ecl_day,
+  count(*) FILTER (WHERE e.day = DATE '2026-08-13' AND e.d_min_km < 1500) AS n_ctl_day
+FROM ep2 e JOIN base2 b USING (day, tx_call, rx_call, band)
+WHERE e.band IN ('80m', '40m', '30m', '20m') AND e.dt_min BETWEEN -180 AND 120
+GROUP BY 1, 2
+HAVING count(*) FILTER (WHERE e.day = DATE '2026-08-12' AND e.d_min_km < 1500) >= 40
+   AND count(*) FILTER (WHERE e.day = DATE '2026-08-13' AND e.d_min_km < 1500) >= 40
+ORDER BY 1, 2;
+
 CREATE OR REPLACE TEMP TABLE both_days AS
 SELECT *,
        date_trunc('day', tx_time)::DATE  AS day,
