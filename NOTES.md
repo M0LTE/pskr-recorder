@@ -84,6 +84,34 @@ The reporting cadence makes this worse than it first looks: at roughly one repor
 
 **Terminator geometry.** Paths crossing the eclipse corridor perpendicular versus running along it should be affected differently, since the shadow is a moving 294 km wide band. Enough spots to slice this way, probably.
 
+## What the first evening's analysis actually found
+
+Preliminary, from data captured 13:50 to 21:15 UTC on eclipse day, before any control day existed.
+
+**No eclipse effect detected.** Not "no effect exists" -- no effect detected at the sensitivity available, which is a weaker claim and the only honest one.
+
+The route there is worth recording, because the interesting part was a false positive.
+
+Controlling for solar elevation at the path midpoint, and using distance from where the umbra actually was at each instant, 80m produced a textbook dose-response: median SNR of -3 dB under 1000 km from the shadow, -8 at 1-2000 km, -11 at 2-3000 km, -13 beyond 4000 km. Monotonic, 10 dB of range, right direction, on exactly the band the physics nominates. It was wrong.
+
+What killed it:
+
+- The near-shadow bin drew on **44 receivers** against 114 to 155 in the far bins. "Near the shadow" and "a different set of stations" were the same variable.
+- Near-shadow paths were **559 km** median against **1068 km** far. Shorter paths have better SNR regardless of the Moon.
+- Comparing **each receiver against itself**, same 20 minutes, near-shadow versus far paths, collapsed the gradient to -1.5 dB and then -6 dB. It vanished and changed sign.
+- Swept across all bands, within-receiver deltas scattered around zero with **no ordering by frequency**: 80m -6.5, 40m 0.0, 30m +2.0, 20m -2.0, 17m +1.5, 15m +1.5. Absorption proportional to 1/f^2 demands a strong positive on 80m decaying upward. It is not there.
+- The displaced-shadow placebo returned **no data at all** (moving the track 120 degrees east lands it where nobody was on 80m). That test failed to run rather than passing, and should be reported as uninformative, not as support.
+
+**Why a null is the expected result for this eclipse, not a disappointing one.** Under the shadow with the Sun above 20 degrees there were over 20000 spots, of which **three** were on 80m or 160m. Nobody is on the low bands in daylight; they arrive at dusk, by which time the eclipse was ending and the D layer was thin anyway. The bands that did have data under the shadow at 30 degrees elevation are the ones where absorption matters least. The frequency coverage and the physics do not overlap, from this longitude, for this event.
+
+That is a real finding about the measurement, and it would apply to anyone attempting this from Europe with this geometry.
+
+## Two tooling traps found the hard way
+
+**`tail` on a build log hides the error.** A rebuild reported a plausible row count and a healthy runtime while silently serving three-hour-old data, because the result table plus timing filled exactly the last ten lines and the error above them was cut off. Log builds in full, or not at all.
+
+**`CREATE OR REPLACE TABLE` fails on a table a view depends on.** So step 0 worked the first time and, on every rerun, kept the old `spots` while rebuilding everything downstream from it -- reporting success throughout. It now drops the view and dependants first, and prints `max(tx_time)` so a stale build is obvious. This would have quietly corrupted the control-day comparison, which is the one analysis that matters.
+
 ## What to actually do
 
 - Now until the event: nothing. It is running.

@@ -11,6 +11,16 @@ SET memory_limit = '6GB';
 SET temp_directory = '/var/lib/pskr/tmp';
 SET preserve_insertion_order = false;   -- large win on bulk scan and COPY
 
+-- Tear the dependency chain down first. CREATE OR REPLACE TABLE fails on a
+-- table that a view depends on, so on a SECOND run `spots` silently keeps its
+-- old contents while everything downstream is rebuilt from it: the script
+-- reports success and the numbers are yesterday's. Found the hard way, on a
+-- rerun that cheerfully reported a row count three hours out of date.
+-- Order matters: dependants before dependencies.
+DROP VIEW  IF EXISTS s;
+DROP TABLE IF EXISTS cell_dist;
+DROP TABLE IF EXISTS spots;
+
 CREATE OR REPLACE TABLE eclipse_track AS
   SELECT * FROM read_csv_auto('/opt/pskr/analysis/eclipse_track.csv');
 
@@ -57,7 +67,10 @@ LEFT JOIN cell_dist cd
 COPY (SELECT * FROM s)
   TO '/var/lib/pskr/spots.parquet' (FORMAT parquet, COMPRESSION zstd);
 
+-- max(tx_time) is here so a stale build is obvious at a glance rather than
+-- hiding behind a plausible-looking row count.
 SELECT count(*)                            AS total_spots,
+       max(tx_time)                        AS last_tx_time,
        count(DISTINCT tx_call)             AS tx_stations,
        count(DISTINCT rx_call)             AS rx_stations,
        round(median(ingest_lag_s), 1)      AS median_lag_s,
