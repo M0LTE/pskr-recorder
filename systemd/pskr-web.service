@@ -1,0 +1,38 @@
+[Unit]
+Description=PSK Reporter eclipse web view
+Documentation=https://github.com/M0LTE/pskr-recorder
+After=network-online.target
+Wants=network-online.target
+
+# StartLimit* are [Unit] keys. Put them in [Service] and systemd ignores them,
+# leaving the default 5-restarts-in-10s limit that stops the unit for good.
+StartLimitIntervalSec=0
+StartLimitBurst=0
+
+[Service]
+Type=simple
+User=pskr
+Group=pskr
+Environment=PSKR_WEB_PORT=8080
+Environment=PSKR_WEB_BIND=0.0.0.0
+Environment=PSKR_STATIC=/opt/pskr/web
+Environment=PSKR_TRACK=/opt/pskr/analysis/eclipse_track.csv
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /opt/pskr/web/pskr_web.py
+
+Restart=always
+RestartSec=3
+
+# Read-only by construction: it never touches the capture directory, so unlike
+# the collectors it gets no ReadWritePaths at all.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,592 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Eclipse propagation monitor</title>
+<meta name="description" content="Live amateur radio propagation during the 2026-08-12 solar eclipse, from the full PSK Reporter feed.">
+<style>
+:root {
+  color-scheme: light;
+  --plane:      #f9f9f7;
+  --surface:    #fcfcfb;
+  --ink:        #0b0b0b;
+  --ink-2:      #52514e;
+  --muted:      #898781;
+  --grid:       #e1e0d9;
+  --axis:       #c3c2b7;
+  --border:     rgba(11,11,11,0.10);
+
+  /* Zones are ordered by distance from the shadow, so they get an ordinal
+     ramp (darkest = closest), not arbitrary categorical hues. 'far' is the
+     control and is deliberately neutral: gray reads as "baseline". */
+  --z-corridor:  #104281;
+  --z-near:      #2a78d6;
+  --z-penumbral: #86b6ef;
+  --z-far:       #898781;
+
+  --accent:     #eb6834;   /* annotation layer: eclipse track + umbra */
+  --sel-fg:     #ffffff;   /* label on a selected chip, vs light-mode --z-near */
+  --shadow:     0 1px 2px rgba(11,11,11,0.05), 0 1px 8px rgba(11,11,11,0.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --plane:      #0d0d0d;
+    --surface:    #1a1a19;
+    --ink:        #ffffff;
+    --ink-2:      #c3c2b7;
+    --muted:      #898781;
+    --grid:       #2c2c2a;
+    --axis:       #383835;
+    --border:     rgba(255,255,255,0.10);
+    --z-corridor:  #cde2fb;
+    --z-near:      #6da7ec;
+    --z-penumbral: #256abf;
+    --z-far:       #898781;
+    --accent:     #d95926;
+    --sel-fg:     #0d0d0d;
+    --shadow:     none;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --plane:      #0d0d0d;
+  --surface:    #1a1a19;
+  --ink:        #ffffff;
+  --ink-2:      #c3c2b7;
+  --muted:      #898781;
+  --grid:       #2c2c2a;
+  --axis:       #383835;
+  --border:     rgba(255,255,255,0.10);
+  --z-corridor:  #cde2fb;
+  --z-near:      #6da7ec;
+  --z-penumbral: #256abf;
+  --z-far:       #898781;
+  --accent:     #d95926;
+  --sel-fg:     #0d0d0d;
+  --shadow:     none;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--plane);
+  color: var(--ink);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1180px; margin: 0 auto; padding: 20px 16px 56px; }
+
+header { display: flex; flex-wrap: wrap; gap: 16px; align-items: baseline; margin-bottom: 4px; }
+h1 { font-size: 20px; font-weight: 620; margin: 0; letter-spacing: -0.01em; }
+.sub { color: var(--ink-2); font-size: 14px; margin: 2px 0 18px; max-width: 68ch; }
+.spacer { flex: 1; }
+button.ghost {
+  font: inherit; font-size: 13px; color: var(--ink-2); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 7px; padding: 5px 11px; cursor: pointer;
+}
+button.ghost:hover { color: var(--ink); }
+
+/* ---- status strip ---- */
+.status {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  gap: 1px; background: var(--border); border: 1px solid var(--border);
+  border-radius: 10px; overflow: hidden; margin-bottom: 8px;
+}
+.stat { background: var(--surface); padding: 12px 14px; }
+.stat .k { font-size: 11px; text-transform: uppercase; letter-spacing: 0.055em; color: var(--muted); }
+.stat .v { font-size: 22px; font-weight: 600; margin-top: 3px; line-height: 1.15; }
+.stat .n { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+.live { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+        background: var(--accent); margin-right: 6px; vertical-align: middle; }
+.live.on { animation: pulse 2s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.25 } }
+
+/* ---- cards ---- */
+.card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 16px; margin-top: 16px; box-shadow: var(--shadow);
+}
+.card h2 { font-size: 14px; font-weight: 620; margin: 0 0 2px; }
+.card .hint { font-size: 12.5px; color: var(--ink-2); margin: 0 0 12px; max-width: 76ch; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 860px) { .grid2 { grid-template-columns: 1fr; } }
+
+/* ---- filter row: one row, above everything it scopes ---- */
+.filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 18px; }
+.filters .lbl { font-size: 12px; color: var(--muted); text-transform: uppercase;
+                letter-spacing: 0.055em; margin-right: 4px; }
+.chip {
+  font: inherit; font-size: 13px; padding: 5px 11px; border-radius: 7px; cursor: pointer;
+  background: var(--surface); color: var(--ink-2); border: 1px solid var(--border);
+}
+.chip:hover { color: var(--ink); }
+/* The selected chip inverts against the zone hue, so its label needs a
+   foreground picked for that hue in each mode: white on the light-mode step,
+   near-black on the lighter dark-mode step. */
+.chip[aria-pressed="true"] {
+  background: var(--z-near); border-color: var(--z-near);
+  color: var(--sel-fg); font-weight: 560;
+}
+
+/* ---- legend ---- */
+.legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 0 0 10px; font-size: 12.5px; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.swatch { width: 12px; height: 3px; border-radius: 2px; display: inline-block; }
+
+/* ---- charts ---- */
+.plot { width: 100%; display: block; overflow: visible; }
+.plot text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+.tick { font-size: 11px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+.endlbl { font-size: 11px; font-weight: 600; }
+.gridline { stroke: var(--grid); stroke-width: 1; shape-rendering: crispEdges; }
+.axisline { stroke: var(--axis); stroke-width: 1; shape-rendering: crispEdges; }
+.serie { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.stale { opacity: 0.45; transition: opacity 120ms ease; }
+
+/* ---- tooltip ---- */
+.tip {
+  position: fixed; pointer-events: none; z-index: 30; opacity: 0;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; font-size: 12.5px; box-shadow: var(--shadow);
+  transition: opacity 90ms ease; min-width: 148px;
+}
+.tip .th { font-weight: 620; margin-bottom: 5px; font-variant-numeric: tabular-nums; }
+.tip .tr { display: flex; align-items: center; gap: 7px; justify-content: space-between; }
+.tip .tr b { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* ---- table ---- */
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--grid);
+         font-variant-numeric: tabular-nums; }
+th:first-child, td:first-child { text-align: left; font-variant-numeric: normal; }
+th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+     color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--axis); }
+td.dim { color: var(--muted); }
+.scroll { overflow-x: auto; }
+.grp { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+
+footer { margin-top: 28px; font-size: 12.5px; color: var(--muted); }
+footer a { color: var(--ink-2); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Eclipse propagation monitor</h1>
+  <div class="spacer"></div>
+  <button class="ghost" id="theme" type="button">Theme</button>
+</header>
+<p class="sub">
+  Live amateur radio reception reports from the full
+  <a href="https://www.mqtt.pskreporter.info/">PSK Reporter</a> feed, during the
+  total solar eclipse of 12 August 2026. Every dot is one station hearing another.
+  The question is whether the Moon&rsquo;s shadow changes what they can hear.
+</p>
+
+<div class="status" id="status"></div>
+
+<div class="card">
+  <h2>Where the spots are</h2>
+  <p class="hint">
+    Density of reception-report path midpoints over the last 10 minutes, on a
+    2&deg; grid. The orange line is the track of the Moon&rsquo;s umbral shadow
+    across the Earth; the filled circle is where it is now. There is no map
+    underneath &mdash; the shape of the continents is drawn purely by where radio
+    amateurs live.
+  </p>
+  <canvas id="map" style="width:100%; display:block; border-radius:6px;"></canvas>
+</div>
+
+<div class="filters" id="filters">
+  <span class="lbl">Band</span>
+</div>
+
+<div class="grid2">
+  <div class="card">
+    <h2>Reception reports per minute</h2>
+    <p class="hint">How much is being heard. Sensitive to how many people are on air, so read it alongside the panel to its right, not on its own.</p>
+    <div class="legend" id="leg1"></div>
+    <svg class="plot" id="c1" height="250" role="img" aria-label="Reception reports per minute by zone"></svg>
+  </div>
+  <div class="card">
+    <h2>Median signal-to-noise ratio</h2>
+    <p class="hint">How well it is being heard, in dB. Much less sensitive to how many people are on air, so this is the more trustworthy of the two.</p>
+    <div class="legend" id="leg2"></div>
+    <svg class="plot" id="c2" height="250" role="img" aria-label="Median signal to noise ratio by zone"></svg>
+  </div>
+</div>
+
+<div class="card">
+  <h2>All bands, last 10 minutes</h2>
+  <p class="hint">
+    The same numbers as above for every band at once, and the accessible equivalent
+    of the charts. <b>Compare each zone against &ldquo;far&rdquo;</b>: it is the control.
+    If every column moves together you are watching sunset, not the eclipse.
+  </p>
+  <div class="scroll"><table id="tbl"></table></div>
+</div>
+
+<div class="card">
+  <h2>What am I looking at?</h2>
+  <p class="hint" style="max-width:78ch">
+    Radio signals on these frequencies bounce off the ionosphere, a layer of the
+    atmosphere that the Sun keeps electrically charged. The lowest layer, the one
+    that mostly just <em>absorbs</em> signals, loses its charge within a couple of
+    minutes once sunlight stops. So when the Moon blocks the Sun, that absorbing
+    layer should briefly fade, and the lower frequency bands (160m, 80m, 40m)
+    should get <em>better</em> &mdash; a false nightfall lasting about an hour.
+    Higher layers recover much more slowly, so the higher bands should respond
+    late and weakly, if at all. That difference in timing between bands is the
+    interesting part.
+  </p>
+  <p class="hint" style="max-width:78ch">
+    Each spot is placed at the midpoint of the path between the two stations,
+    which is roughly where the signal bounced. Zones are how far that midpoint is
+    from the shadow&rsquo;s track: <b>corridor</b> under 800&nbsp;km,
+    <b>near</b> 800&ndash;2000&nbsp;km, <b>penumbral</b> 2000&ndash;4000&nbsp;km,
+    and <b>far</b> beyond that, which is the control.
+  </p>
+  <p class="hint" style="max-width:78ch">
+    The honest caveat: this eclipse happens at European dusk, and the low bands
+    improve at dusk anyway, every single day. That is what the &ldquo;far&rdquo;
+    control is for, and why the real answer comes from comparing today against
+    the same hours on an ordinary day.
+  </p>
+</div>
+
+<footer>
+  Data: <a href="https://www.mqtt.pskreporter.info/">mqtt.pskreporter.info</a>,
+  the full feed, redistributed from pskreporter.info. Shadow track from NASA&rsquo;s
+  published path table. Everything shown is also being recorded for later analysis:
+  <a href="https://github.com/M0LTE/pskr-recorder">github.com/M0LTE/pskr-recorder</a>.
+  <span id="foot"></span>
+</footer>
+
+</div>
+<div class="tip" id="tip"></div>
+
+<script>
+"use strict";
+const ZONES = ["corridor", "near", "penumbral", "far"];
+const ZCOL = {}, ZLABEL = {corridor:"corridor", near:"near", penumbral:"penumbral", far:"far (control)"};
+function readColors() {
+  const cs = getComputedStyle(document.documentElement);
+  ZONES.forEach(z => ZCOL[z] = cs.getPropertyValue("--z-" + z).trim());
+  return cs;
+}
+readColors();
+
+/* Relative luminance of the page plane, so the map ramp can be oriented against
+   whichever surface is actually in force rather than guessing from the toggle. */
+function isDarkSurface() {
+  const h = getComputedStyle(document.documentElement).getPropertyValue("--plane").trim();
+  const m = /^#?([0-9a-f]{6})$/i.exec(h);
+  if (!m) return false;
+  const v = parseInt(m[1], 16);
+  const f = c => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+  return 0.2126 * f(v >> 16 & 255) + 0.7152 * f(v >> 8 & 255) + 0.0722 * f(v & 255) < 0.35;
+}
+
+let BAND = localStorage.getItem("band") || "40m";
+let state = null, series = null;
+
+const $ = s => document.querySelector(s);
+const pad = n => String(n).padStart(2, "0");
+const hhmm = e => { const d = new Date(e * 1000); return pad(d.getUTCHours()) + ":" + pad(d.getUTCMinutes()); };
+const hhmmss = e => hhmm(e) + ":" + pad(new Date(e * 1000).getUTCSeconds());
+
+/* ---------- theme ---------- */
+$("#theme").addEventListener("click", () => {
+  const cur = document.documentElement.getAttribute("data-theme");
+  const sysDark = matchMedia("(prefers-color-scheme: dark)").matches;
+  const next = cur ? (cur === "dark" ? "light" : "dark") : (sysDark ? "light" : "dark");
+  document.documentElement.setAttribute("data-theme", next);
+  localStorage.setItem("theme", next);
+  readColors(); render();
+});
+if (localStorage.getItem("theme")) document.documentElement.setAttribute("data-theme", localStorage.getItem("theme"));
+
+/* ---------- status ---------- */
+function renderStatus() {
+  if (!state) return;
+  const e = state.eclipse, u = e.umbra;
+  let ecl, eclNote;
+  if (u) {
+    ecl = u.lat.toFixed(1) + "°N " + Math.abs(u.lon).toFixed(1) + "°" + (u.lon < 0 ? "W" : "E");
+    eclNote = u.km_from_home.toLocaleString() + " km from " + e.home.name;
+  } else if (state.now < e.track_start) {
+    const s = Math.max(0, e.track_start - state.now);
+    ecl = Math.floor(s / 3600) + "h " + pad(Math.floor(s % 3600 / 60)) + "m";
+    eclNote = "until the shadow reaches Earth at " + hhmm(e.track_start);
+  } else {
+    ecl = "ended";
+    eclNote = "shadow left Earth at " + hhmm(e.track_end);
+  }
+  const cards = [
+    ["Time", hhmmss(state.now) + " UTC", "feed runs " + Math.round(state.feed_lag_s) + "s behind"],
+    [u ? "Shadow now" : "Eclipse", ecl, eclNote],
+    ["Spot rate", state.rate_per_s.toFixed(0) + "/s", state.spots_seen.toLocaleString() + " seen this session"],
+    ["Closest to " + e.home.name, e.home.closest_km.toLocaleString() + " km", "at " + hhmm(e.home.closest_epoch) + " UTC"],
+  ];
+  $("#status").innerHTML = cards.map((c, i) =>
+    '<div class="stat"><div class="k">' + c[0] + '</div><div class="v">' +
+    (i === 0 ? '<span class="live on"></span>' : '') + c[1] +
+    '</div><div class="n">' + c[2] + '</div></div>').join("");
+}
+
+/* ---------- filters ---------- */
+function renderFilters() {
+  if (!state) return;
+  const el = $("#filters");
+  const have = state.bands.map(b => b.band);
+  if (!have.includes(BAND) && have.length) BAND = have[0];
+  el.querySelectorAll(".chip").forEach(n => n.remove());
+  have.forEach(b => {
+    const btn = document.createElement("button");
+    btn.className = "chip"; btn.type = "button"; btn.textContent = b;
+    btn.setAttribute("aria-pressed", b === BAND ? "true" : "false");
+    btn.onclick = () => { BAND = b; localStorage.setItem("band", b); renderFilters(); loadSeries(true); };
+    el.appendChild(btn);
+  });
+}
+
+/* ---------- charts ---------- */
+function legend(el) {
+  el.innerHTML = ZONES.map(z =>
+    '<span><i class="swatch" style="background:' + ZCOL[z] + '"></i>' + ZLABEL[z] + '</span>').join("");
+}
+
+function niceTicks(lo, hi, want) {
+  if (!isFinite(lo) || !isFinite(hi)) return [0, 1];
+  if (lo === hi) { lo -= 1; hi += 1; }
+  const raw = (hi - lo) / want, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const norm = raw / mag, step = (norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10) * mag;
+  const out = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + step * 0.001; v += step) out.push(+v.toFixed(6));
+  return out;
+}
+
+function drawChart(svgId, valueIndex, fmt) {
+  const svg = document.getElementById(svgId);
+  const W = svg.clientWidth || 520, H = 250;
+  const M = { t: 12, r: 46, b: 26, l: 44 };
+  svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+  if (!series) { svg.innerHTML = ""; return; }
+
+  const S = series.series;
+  let xs = [], ys = [];
+  ZONES.forEach(z => (S[z] || []).forEach(p => {
+    if (p[valueIndex] === null || p[valueIndex] === undefined) return;
+    xs.push(p[0]); ys.push(p[valueIndex]);
+  }));
+  if (!xs.length) { svg.innerHTML = '<text class="tick" x="8" y="24">waiting for data…</text>'; return; }
+
+  const x0 = Math.min.apply(null, xs), x1 = Math.max.apply(null, xs);
+  let y0 = Math.min.apply(null, ys), y1 = Math.max.apply(null, ys);
+  const padY = (y1 - y0) * 0.12 || 1; y0 -= padY; y1 += padY;
+  if (valueIndex === 1) y0 = Math.min(0, y0);
+
+  const px = t => M.l + (x1 === x0 ? 0 : (t - x0) / (x1 - x0)) * (W - M.l - M.r);
+  const py = v => M.t + (1 - (v - y0) / (y1 - y0)) * (H - M.t - M.b);
+
+  let g = "";
+  niceTicks(y0, y1, 5).forEach(v => {
+    if (v < y0 || v > y1) return;
+    g += '<line class="gridline" x1="' + M.l + '" y1="' + py(v).toFixed(1) + '" x2="' + (W - M.r) + '" y2="' + py(v).toFixed(1) + '"/>' +
+         '<text class="tick" x="' + (M.l - 7) + '" y="' + (py(v) + 3.5).toFixed(1) + '" text-anchor="end">' + fmt(v) + '</text>';
+  });
+  g += '<line class="axisline" x1="' + M.l + '" y1="' + (H - M.b) + '" x2="' + (W - M.r) + '" y2="' + (H - M.b) + '"/>';
+
+  const span = x1 - x0, stepT = span > 10800 ? 3600 : span > 3600 ? 1800 : 900;
+  for (let t = Math.ceil(x0 / stepT) * stepT; t <= x1; t += stepT)
+    g += '<text class="tick" x="' + px(t).toFixed(1) + '" y="' + (H - M.b + 15) + '" text-anchor="middle">' + hhmm(t) + '</text>';
+
+  const endLabels = [];
+  ZONES.forEach(z => {
+    const pts = (S[z] || []).filter(p => p[valueIndex] !== null && p[valueIndex] !== undefined);
+    if (!pts.length) return;
+    let d = "", pen = true;
+    const byT = {}; pts.forEach(p => byT[p[0]] = p[valueIndex]);
+    const times = Object.keys(byT).map(Number).sort((a, b) => a - b);
+    times.forEach((t, i) => {
+      if (i > 0 && t - times[i - 1] > 180) pen = true;   // real gap: lift the pen
+      d += (pen ? "M" : "L") + px(t).toFixed(1) + " " + py(byT[t]).toFixed(1) + " ";
+      pen = false;
+    });
+    g += '<path class="serie" d="' + d.trim() + '" stroke="' + ZCOL[z] + '"/>';
+    const last = times[times.length - 1];
+    endLabels.push({ x: px(last) + 6, y: py(byT[last]), col: ZCOL[z], txt: fmt(byT[last]) });
+  });
+
+  // Series that finish close together would stack their end labels on top of
+  // one another; nudge them apart, keeping order, before drawing.
+  endLabels.sort((a, b) => a.y - b.y);
+  const MINGAP = 12;
+  for (let i = 1; i < endLabels.length; i++)
+    if (endLabels[i].y - endLabels[i - 1].y < MINGAP)
+      endLabels[i].y = endLabels[i - 1].y + MINGAP;
+  const overflow = endLabels.length && endLabels[endLabels.length - 1].y - (H - M.b);
+  if (overflow > 0) endLabels.forEach(l => l.y -= overflow);
+  endLabels.forEach(l => {
+    g += '<text class="endlbl" x="' + l.x.toFixed(1) + '" y="' + (l.y + 3.5).toFixed(1) +
+         '" fill="' + l.col + '">' + l.txt + '</text>';
+  });
+
+  g += '<line id="' + svgId + '-cross" class="axisline" x1="0" y1="' + M.t + '" x2="0" y2="' + (H - M.b) + '" style="opacity:0"/>';
+  svg.innerHTML = g;
+  svg.__hit = { px, py, x0, x1, M, W, H, valueIndex, fmt };
+}
+
+function attachHover(svgId) {
+  const svg = document.getElementById(svgId), tip = $("#tip");
+  function move(ev) {
+    const h = svg.__hit; if (!h || !series) return;
+    const r = svg.getBoundingClientRect();
+    const sx = (ev.clientX - r.left) * (h.W / r.width);
+    const frac = (sx - h.M.l) / (h.W - h.M.l - h.M.r);
+    const t = Math.round((h.x0 + frac * (h.x1 - h.x0)) / 60) * 60;
+    if (t < h.x0 - 120 || t > h.x1 + 120) return hide();
+    const cross = document.getElementById(svgId + "-cross");
+    if (cross) { cross.setAttribute("x1", h.px(t)); cross.setAttribute("x2", h.px(t)); cross.style.opacity = "0.9"; }
+    let rows = "";
+    ZONES.forEach(z => {
+      const p = (series.series[z] || []).find(q => q[0] === t);
+      const v = p ? p[h.valueIndex] : null;
+      rows += '<div class="tr"><span><i class="swatch" style="background:' + ZCOL[z] + '"></i> ' + z + '</span><b>' +
+              (v === null || v === undefined ? "–" : h.fmt(v)) + '</b></div>';
+    });
+    tip.innerHTML = '<div class="th">' + hhmm(t) + ' UTC · ' + series.band + '</div>' + rows;
+    tip.style.opacity = "1";
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    tip.style.left = Math.min(window.innerWidth - tw - 10, Math.max(10, ev.clientX + 14)) + "px";
+    tip.style.top = Math.min(window.innerHeight - th - 10, Math.max(10, ev.clientY - th - 12)) + "px";
+  }
+  function hide() {
+    tip.style.opacity = "0";
+    const cross = document.getElementById(svgId + "-cross");
+    if (cross) cross.style.opacity = "0";
+  }
+  svg.addEventListener("mousemove", move);
+  svg.addEventListener("mouseleave", hide);
+  svg.addEventListener("touchmove", ev => { if (ev.touches[0]) move(ev.touches[0]); }, { passive: true });
+  svg.addEventListener("touchend", hide);
+}
+
+/* ---------- map ---------- */
+function drawMap() {
+  const cv = $("#map"); if (!state) return;
+  const dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth, H = Math.round(W * 0.46);
+  cv.width = W * dpr; cv.height = H * dpr; cv.style.height = H + "px";
+  const g = cv.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const cs = getComputedStyle(document.documentElement);
+  g.fillStyle = cs.getPropertyValue("--plane").trim();
+  g.fillRect(0, 0, W, H);
+
+  // Equirectangular. The north edge has to clear the shadow track's highest
+  // point (87.8°N over the Arctic at 17:08) or the track is clipped and appears
+  // to start in mid-air at the frame edge.
+  const LAT0 = 89, LAT1 = -60;
+  const px = lon => (lon + 180) / 360 * W;
+  const py = lat => (LAT0 - lat) / (LAT0 - LAT1) * H;
+
+  g.strokeStyle = cs.getPropertyValue("--grid").trim(); g.lineWidth = 1;
+  for (let lon = -180; lon <= 180; lon += 30) { g.beginPath(); g.moveTo(px(lon), 0); g.lineTo(px(lon), H); g.stroke(); }
+  for (let lat = -60; lat <= 80; lat += 20) { g.beginPath(); g.moveTo(0, py(lat)); g.lineTo(W, py(lat)); g.stroke(); }
+
+  const cell = state.grid_cell_deg;
+  let mx = 1; state.grid.forEach(c => { if (c[2] > mx) mx = c[2]; });
+  // A sequential ramp must run away from the surface, so "near zero" recedes
+  // into the background. On the dark surface that means the ramp reverses:
+  // otherwise the densest cells are the darkest and vanish, while empty ones
+  // glow, which is exactly backwards.
+  const ramp = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"];
+  if (isDarkSurface()) ramp.reverse();
+  const w = Math.abs(px(cell) - px(0)), h = Math.abs(py(0) - py(cell));
+  state.grid.forEach(c => {
+    const lat = c[0], lon = c[1];
+    if (lat > LAT0 || lat < LAT1) return;
+    const f = Math.log1p(c[2]) / Math.log1p(mx);
+    g.fillStyle = ramp[Math.min(ramp.length - 1, Math.floor(f * ramp.length))];
+    g.globalAlpha = 0.35 + 0.65 * f;
+    g.fillRect(px(lon) - w / 2, py(lat) - h / 2, Math.max(w, 1.5), Math.max(h, 1.5));
+  });
+  g.globalAlpha = 1;
+
+  // annotation layer: the shadow track, then where it is now
+  const acc = cs.getPropertyValue("--accent").trim();
+  g.strokeStyle = acc; g.lineWidth = 2; g.lineJoin = "round"; g.beginPath();
+  state.track.forEach((p, i) => { const X = px(p[2]), Y = py(p[1]); i ? g.lineTo(X, Y) : g.moveTo(X, Y); });
+  g.stroke();
+  const u = state.eclipse.umbra;
+  if (u) {
+    g.fillStyle = acc; g.strokeStyle = cs.getPropertyValue("--surface").trim(); g.lineWidth = 2;
+    g.beginPath(); g.arc(px(u.lon), py(u.lat), 6, 0, Math.PI * 2); g.fill(); g.stroke();
+  }
+  const home = state.eclipse.home;
+  g.fillStyle = cs.getPropertyValue("--ink").trim();
+  g.beginPath(); g.arc(px(home.lon), py(home.lat), 2.5, 0, Math.PI * 2); g.fill();
+}
+
+/* ---------- table ---------- */
+function renderTable() {
+  if (!state) return;
+  const head = '<thead><tr><th rowspan="2">Band</th>' +
+    '<th colspan="4" class="grp" style="text-align:center">Reports per minute</th>' +
+    '<th colspan="4" class="grp" style="text-align:center">Median SNR (dB)</th></tr><tr>' +
+    ZONES.map(z => '<th>' + z + '</th>').join("") + ZONES.map(z => '<th>' + z + '</th>').join("") + '</tr></thead>';
+  const rows = state.bands.map(b => {
+    const c1 = ZONES.map(z => { const v = b.zones[z]; return v ? '<td>' + v.rate.toFixed(1) + '</td>' : '<td class="dim">–</td>'; }).join("");
+    const c2 = ZONES.map(z => { const v = b.zones[z]; return (v && v.snr !== null) ? '<td>' + v.snr + '</td>' : '<td class="dim">–</td>'; }).join("");
+    return '<tr><td><b>' + b.band + '</b></td>' + c1 + c2 + '</tr>';
+  }).join("");
+  $("#tbl").innerHTML = head + '<tbody>' + rows + '</tbody>';
+}
+
+/* ---------- render + poll ---------- */
+function render() {
+  renderStatus(); renderFilters(); renderTable(); drawMap();
+  legend($("#leg1")); legend($("#leg2"));
+  drawChart("c1", 1, v => Math.round(v).toString());
+  drawChart("c2", 2, v => (v > 0 ? "+" : "") + Math.round(v));
+}
+
+async function loadState() {
+  try {
+    const r = await fetch("/api/state", { cache: "no-store" });
+    state = await r.json();
+    document.body.classList.remove("stale");
+    renderStatus(); renderFilters(); renderTable(); drawMap();
+    // Minutes older than startup only ever received late stragglers, so the
+    // charts deliberately begin there rather than showing a fake ramp.
+    $("#foot").textContent = "Charts collect from " + hhmm(state.collecting_since) +
+      " UTC (uptime " + Math.floor(state.uptime_s / 60) + " min, " +
+      state.disconnects + " reconnects).";
+  } catch (e) { document.body.classList.add("stale"); }
+}
+async function loadSeries(force) {
+  try {
+    const r = await fetch("/api/series?band=" + encodeURIComponent(BAND), { cache: "no-store" });
+    series = await r.json();
+    legend($("#leg1")); legend($("#leg2"));
+    drawChart("c1", 1, v => Math.round(v).toString());
+    drawChart("c2", 2, v => (v > 0 ? "+" : "") + Math.round(v));
+  } catch (e) { if (!force) document.body.classList.add("stale"); }
+}
+
+attachHover("c1"); attachHover("c2");
+let rt;
+addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(render, 150); });
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { readColors(); render(); });
+
+loadState().then(loadSeries);
+setInterval(loadState, 5000);
+setInterval(loadSeries, 20000);
+setInterval(renderStatus, 1000);
+</script>
+</body>
+</html>

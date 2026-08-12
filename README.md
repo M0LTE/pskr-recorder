@@ -89,6 +89,38 @@ files and cannot affect the collectors. Buckets spots by great-circle path midpo
 umbral centre line: `corridor` under 800 km, `near` 800-2000, `penumbral` 2000-4000, `far` beyond,
 which acts as the control.
 
+## Web view
+
+`pskr-web.service` serves a public-facing page on port 8080. Like the CLI watcher it takes its own
+MQTT subscription and holds everything in memory: it never reads or writes the capture directory,
+gets no `ReadWritePaths` at all, and cannot affect the collectors.
+
+```
+GET /                     the page
+GET /api/state            header, per-band table, map grid   (page polls ~5s)
+GET /api/series?band=40m  per-zone time series for one band  (page polls ~20s)
+GET /healthz
+```
+
+Three properties of the feed shape what it will and will not show, and all three were things the
+first version got wrong until the rendered page made them obvious:
+
+- **Minutes older than process start are dropped.** Reports keep arriving for up to ~45 minutes, so
+  for any minute that had already passed at startup we only ever saw the stragglers. Plotting them
+  produced a convincing exponential ramp that was really just "how long have we been listening".
+  The page shows its collection start in the footer. Restarting the service resets this, so do not
+  restart it just before something you want to watch.
+- **The newest 3 minutes are excluded** from both chart and table for the same reason, otherwise
+  there is a cliff at the right-hand edge.
+- **Medians below 5 samples are suppressed.** A median over one or two reports is noise.
+
+Colour follows the data's shape rather than taste. Zones are ordered by distance from the shadow, so
+they get an ordinal blue ramp (darkest = closest), with the `far` control in neutral gray so it
+reads as the baseline. Both ramps were checked with the palette validator in the `dataviz` skill
+rather than eyeballed, in both light and dark mode. The map's density ramp reverses in dark mode:
+a sequential ramp has to run away from the surface, or the densest cells are the darkest and
+disappear while the empty ones glow.
+
 ## Analysis
 
 DuckDB refuses any file that is not a complete gzip stream, with `Input is not a GZIP stream`. Two
@@ -122,7 +154,10 @@ what makes before/during/after comparison of the same corridor possible.
 | `collector/pskr_collect.py` | the collector; `/opt/pskr/` on the container |
 | `collector/pskr_watch.py` | live watcher; `pskr-watch` on PATH |
 | `collector/pskr-status` | one-glance health check; `pskr-status` on PATH |
+| `web/pskr_web.py` | read-only JSON API and static server for the public page |
+| `web/index.html` | the page: status strip, density map, two charts, table view |
 | `systemd/pskr-collect@.service` | template unit, instantiated as `@a` and `@b` |
+| `systemd/pskr-web.service` | the web view |
 | `analysis/pskr-prepare` | normalises live/damaged gzip into a clean set; `pskr-prepare` on PATH |
 | `analysis/macros.sql` | Maidenhead decode, haversine, great-circle midpoint |
 | `analysis/step0_materialise.sql` | dedupe, decode, zone assignment, Parquet export |

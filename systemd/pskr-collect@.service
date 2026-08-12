@@ -4,6 +4,11 @@ Documentation=https://www.mqtt.pskreporter.info/
 After=network-online.target
 Wants=network-online.target
 
+# StartLimit* are [Unit] keys. Put them in [Service] and systemd ignores them,
+# leaving the default 5-restarts-in-10s limit that stops the unit for good.
+StartLimitIntervalSec=0
+StartLimitBurst=0
+
 [Service]
 Type=simple
 User=pskr
@@ -19,7 +24,6 @@ ExecStart=/usr/bin/python3 /opt/pskr/pskr_collect.py
 # A once-only event: never give up, never rate-limit the restarts away.
 Restart=always
 RestartSec=2
-StartLimitIntervalSec=0
 
 # Give the writer time to close the gzip member cleanly on stop.
 TimeoutStopSec=45
